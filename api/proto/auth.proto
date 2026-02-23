@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package auth;
+option go_package = "github.com/mohammad-kh1/distributed-gateway/api/proto";
+
+service AuthService {
+    rpc VerifyToken (VerifyRequest) returns (VerifyResponse);
+}
+
+message VerifyRequest {
+    string token = 1;
+}
+
+message VerifyResponse {
+    bool authorized  = 1;
+    string user_id   = 2;
+    int32 rate_limit = 3;
+    string tier      = 4;
+}
