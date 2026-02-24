@@ -147,9 +147,9 @@ const file_api_proto_auth_proto_rawDesc = "" +
 	"\auser_id\x18\x02 \x01(\tR\x06userId\x12\x1d\n" +
 	"\n" +
 	"rate_limit\x18\x03 \x01(\x05R\trateLimit\x12\x12\n" +
-	"\x04tier\x18\x04 \x01(\tR\x04tier2G\n" +
-	"\vAuthService\x128\n" +
-	"\vVerifyToken\x12\x13.auth.VerifyRequest\x1a\x14.auth.VerifyResponseB7Z5github.com/mohammad-kh1/distributed-gateway/api/protob\x06proto3"
+	"\x04tier\x18\x04 \x01(\tR\x04tier2I\n" +
+	"\vAuthService\x12:\n" +
+	"\vVerifyToken\x12\x13.auth.VerifyRequest\x1a\x14.auth.VerifyResponse\"\x00B7Z5github.com/mohammad-kh1/distributed-gateway/api/protob\x06proto3"
 
 var (
 	file_api_proto_auth_proto_rawDescOnce sync.Once

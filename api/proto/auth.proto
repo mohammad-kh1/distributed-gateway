@@ -4,7 +4,7 @@ package auth;
 option go_package = "github.com/mohammad-kh1/distributed-gateway/api/proto";
 
 service AuthService {
-    rpc VerifyToken (VerifyRequest) returns (VerifyResponse);
+    rpc VerifyToken (VerifyRequest) returns (VerifyResponse) {};
 }
 
 message VerifyRequest {
