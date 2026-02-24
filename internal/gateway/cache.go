@@ -18,6 +18,14 @@ func NewAuthCache() *AuthCache {
 	}
 }
 
+func (c *AuthCache) Get(token string) (*proto.VerifyResponse, bool) {
+	val, found := c.store.Get(token)
+	if !found {
+		return nil, false
+	}
+	return val.(*proto.VerifyResponse), true
+}
+
 func (c *AuthCache) Set(token string, res *proto.VerifyResponse) {
 	c.store.Set(token, res, cache.DefaultExpiration)
 }
