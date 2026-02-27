@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"net"
+	"os"
 
 	"github.com/mohammad-kh1/distributed-gateway/api/proto"
 	"github.com/mohammad-kh1/distributed-gateway/internal/auth"
@@ -13,7 +14,10 @@ import (
 
 func main() {
 	// connect to postgres database
-	dsn := "postgres://postgres:password@localhost:5432/auth_db"
+	dsn := os.Getenv("DB_URL")
+	if dsn == "" {
+		dsn = "postgres://postgres:password@postgres:5432/auth_db"
+	}
 	repo := dbAuth.NewRepository(dsn)
 
 	lis, err := net.Listen("tcp", ":50051")

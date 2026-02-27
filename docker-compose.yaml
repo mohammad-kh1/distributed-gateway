@@ -1,15 +1,62 @@
+version: "3.8"
+
 services:
   postgres:
     image: postgres:15-alpine
     environment:
       POSTGRES_PASSWORD: password
       POSTGRES_DB: auth_db
-    ports:
-      - "5432:5432"
     volumes:
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  auth-service:
+    build:
+      context: .
+      dockerfile: cmd/auth/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - DB_URL=postgres://postgres:password@postgres:5432/auth_db
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "50051"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s #
+    restart: unless-stopped
+
+  gateway-service:
+    build:
+      context: .
+      dockerfile: cmd/gateway/Dockerfile
     ports:
-      - "6379:6379"
+      - "8080:8080"
+    depends_on:
+      redis:
+        condition: service_healthy
+      auth-service:
+        condition: service_healthy
+    environment:
+      - REDIS_ADDR=redis:6379
+      - AUTH_ADDR=auth-service:50051
+    restart: unless-stopped
+
+networks:
+  default:
+    driver: bridge

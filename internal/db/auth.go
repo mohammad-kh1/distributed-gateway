@@ -29,7 +29,7 @@ type UserData struct {
 
 func (r *Repository) GetUserByToken(ctx context.Context, token string) (*UserData, error) {
 	var user UserData
-	query := `SELECT * FROM users WHERE token = $1`
+	query := `SELECT user_id , rate_limit , tier FROM users WHERE token = $1`
 	err := r.db.QueryRowContext(ctx, query, token).Scan(&user.UserID, &user.RateLimit, &user.Tier)
 	if err != nil {
 		return nil, err

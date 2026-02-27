@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/mohammad-kh1/distributed-gateway/api/proto"
@@ -20,18 +21,22 @@ func main() {
 	}
 	defer logger.Get().Sync()
 
-	// Initialize dependencies
-	authClient := gateway.NewAuthClient("localhost:50051")
-	authCache := gateway.NewAuthCache()
-	limiter := ratelimit.NewRedisLimiter("localhost:6379")
+	redisAddr := os.Getenv("REDIS_ADDR")
+	if redisAddr == "" {
+		redisAddr = "localhost:6379"
+	}
 
+	authClient := gateway.NewAuthClient("auth-service:50051")
+	authCache := gateway.NewAuthCache()
+
+	limiter := ratelimit.NewRedisLimiter(redisAddr)
 	// Circuit Breaker configuration
 	cb := gobreaker.NewCircuitBreaker(gobreaker.Settings{
 		Name:        "Auth-Service",
 		ReadyToTrip: func(counts gobreaker.Counts) bool { return counts.ConsecutiveFailures >= 3 },
-		Timeout:     10 * time.Second, // request timeout
-		Interval:    5 * time.Second,  // period to reset counters
-		MaxRequests: 3,                // requests in half-open state (note: field is MaxRequests, not MaxRequest)
+		Timeout:     10 * time.Second,
+		Interval:    5 * time.Second,
+		MaxRequests: 3,
 		OnStateChange: func(name string, from gobreaker.State, to gobreaker.State) {
 			logger.Get().Info("Circuit breaker state changed",
 				zap.String("name", name),
@@ -81,10 +86,8 @@ func handleData(
 			return
 		}
 
-		// Type assertion is safe because Execute returns the same type we returned inside
 		res = result.(*proto.VerifyResponse)
 
-		// Cache the successful result
 		authCache.Set(token, res)
 	}
 
