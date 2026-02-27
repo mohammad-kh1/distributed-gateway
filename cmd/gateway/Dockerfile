@@ -12,7 +12,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /gateway-service ./cmd/gateway/main.go
 FROM alpine:latest
 
 WORKDIR /
-
+COPY dashboard.html .
 COPY --from=builder /gateway-service /gateway-service
 
 EXPOSE 8080

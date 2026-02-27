@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -21,96 +22,124 @@ func main() {
 	}
 	defer logger.Get().Sync()
 
-	redisAddr := os.Getenv("REDIS_ADDR")
-	if redisAddr == "" {
-		redisAddr = "localhost:6379"
-	}
-
+	redisAddr := getEnv("REDIS_ADDR", "localhost:6379")
 	authClient := gateway.NewAuthClient("auth-service:50051")
 	authCache := gateway.NewAuthCache()
-
 	limiter := ratelimit.NewRedisLimiter(redisAddr)
-	// Circuit Breaker configuration
-	cb := gobreaker.NewCircuitBreaker(gobreaker.Settings{
+
+	cb := initCircuitBreaker()
+
+	mainMux := http.NewServeMux()
+	apiMux := http.NewServeMux()
+
+	mainMux.HandleFunc("/dashboard.html", handleDashboard)
+	mainMux.HandleFunc("/admin/metrics", handleMetricsJSON)
+	mainMux.HandleFunc("/admin/metrics/stream", handleMetricsStream)
+
+	apiMux.HandleFunc("/api/data", func(w http.ResponseWriter, r *http.Request) {
+		handleData(w, r, authClient, authCache, limiter, cb)
+	})
+
+	mainMux.Handle("/api/", gateway.LoggingMiddleware(apiMux))
+
+	log.Println("Gateway is running on port :8080")
+	log.Fatal(http.ListenAndServe(":8080", mainMux))
+}
+
+func handleData(w http.ResponseWriter, r *http.Request, auth *gateway.AuthClient, cache *gateway.AuthCache, lim *ratelimit.RedisLimiter, cb *gobreaker.CircuitBreaker) {
+	token := r.Header.Get("Authorization")
+	if token == "" {
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprint(w, "Authorization header required")
+		return
+	}
+
+	res, found := cache.Get(token)
+	if !found {
+		result, err := cb.Execute(func() (interface{}, error) {
+			return auth.Authenticate(token)
+		})
+
+		if err != nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			fmt.Fprint(w, "Auth service unavailable (Circuit Breaker Open)")
+			return
+		}
+
+		res = result.(*proto.VerifyResponse)
+		cache.Set(token, res)
+	}
+
+	if !res.Authorized {
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprint(w, "Unauthorized")
+		return
+	}
+
+	allowed, err := lim.IsAllowed(r.Context(), res.UserId, int(res.RateLimit))
+	if err != nil || !allowed {
+		w.WriteHeader(http.StatusTooManyRequests)
+		fmt.Fprint(w, "Too Many Requests! Slow down.")
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, "Welcome %s! Rate limit: %d/min\n", res.UserId, res.RateLimit)
+}
+
+func handleMetricsStream(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		default:
+			jsonData, _ := json.Marshal(gateway.GlobalStats)
+			fmt.Fprintf(w, "data: %s\n\n", jsonData)
+			flusher.Flush()
+			time.Sleep(1 * time.Second)
+		}
+	}
+}
+
+func handleMetricsJSON(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	json.NewEncoder(w).Encode(gateway.GlobalStats)
+}
+
+func handleDashboard(w http.ResponseWriter, r *http.Request) {
+	http.ServeFile(w, r, "dashboard.html")
+}
+
+func initCircuitBreaker() *gobreaker.CircuitBreaker {
+	return gobreaker.NewCircuitBreaker(gobreaker.Settings{
 		Name:        "Auth-Service",
 		ReadyToTrip: func(counts gobreaker.Counts) bool { return counts.ConsecutiveFailures >= 3 },
 		Timeout:     10 * time.Second,
-		Interval:    5 * time.Second,
-		MaxRequests: 3,
-		OnStateChange: func(name string, from gobreaker.State, to gobreaker.State) {
-			logger.Get().Info("Circuit breaker state changed",
-				zap.String("name", name),
+		OnStateChange: func(name string, from, to gobreaker.State) {
+			logger.Get().Info("Circuit breaker state change",
+				zap.String("service", name),
 				zap.String("from", from.String()),
 				zap.String("to", to.String()),
 			)
 		},
 	})
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/data", func(w http.ResponseWriter, r *http.Request) {
-		handleData(w, r, authClient, authCache, limiter, cb)
-	})
-
-	loggingMux := gateway.LoggingMiddleware(mux)
-
-	log.Println("Gateway is running on port :8080")
-	log.Fatal(http.ListenAndServe(":8080", loggingMux))
 }
 
-// handleData now takes dependencies as parameters (cleaner, testable)
-func handleData(
-	w http.ResponseWriter,
-	r *http.Request,
-	authClient *gateway.AuthClient,
-	authCache *gateway.AuthCache,
-	limiter *ratelimit.RedisLimiter,
-	cb *gobreaker.CircuitBreaker,
-) {
-	token := r.Header.Get("Authorization")
-	if token == "" {
-		http.Error(w, "Authorization header required", http.StatusUnauthorized)
-		return
+func getEnv(key, fallback string) string {
+	if value, ok := os.LookupEnv(key); ok {
+		return value
 	}
-
-	// 1. Check cache first (fast path)
-	res, found := authCache.Get(token)
-	if !found {
-		// 2. Use circuit breaker to call auth service
-		result, err := cb.Execute(func() (interface{}, error) {
-			return authClient.Authenticate(token)
-		})
-
-		if err != nil {
-			// Circuit open / timeout / too many failures → 503
-			http.Error(w, "Auth service temporarily unavailable (circuit breaker open)", http.StatusServiceUnavailable)
-			return
-		}
-
-		res = result.(*proto.VerifyResponse)
-
-		authCache.Set(token, res)
-	}
-
-	// 3. Authorization check
-	if !res.Authorized {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
-	}
-
-	// 4. Rate limiting
-	allowed, err := limiter.IsAllowed(r.Context(), res.UserId, int(res.RateLimit))
-	if err != nil {
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-	if !allowed {
-		http.Error(w, "Too Many Requests! Slow down.", http.StatusTooManyRequests)
-		return
-	}
-
-	// 5. Success response
-	fmt.Fprintf(w, "Welcome User: %s! Your rate limit is %d requests per minute.\n",
-		res.UserId,
-		res.RateLimit,
-	)
+	return fallback
 }
